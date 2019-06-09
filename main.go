@@ -6,8 +6,8 @@ import (
 )
 
 func main() {
-	conf := processorconf.NewProcessorConf("approx_test", []string{"MODE"})
-	errMsg := errormsg.ErrorMsg{Processor: "approx_test"}
+	conf := processorconf.NewProcessorConf("approx_check", []string{"MODE"})
+	errMsg := errormsg.ErrorMsg{Processor: "approx_check"}
 
 	if len(conf.Outputs) != 1 {
 		errMsg.LogFatal(nil, "Test expects exactly 1 output, but got %v", len(conf.Outputs))
