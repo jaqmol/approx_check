@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"time"
 
 	"github.com/jaqmol/approx/errormsg"
@@ -24,17 +25,24 @@ func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 		errMsg.LogFatal(nil, "Test expects env MODE to be either produce or consume, but got %v", modeEnv)
 	}
 
-	speedEnv := conf.Envs["SPEED"]
 	var speed Speed
-	switch speedEnv {
-	case "fast":
-		speed = SpeedFast
-	case "moderate":
-		speed = SpeedModerate
-	case "slow":
-		speed = SpeedSlow
-	default:
-		errMsg.LogFatal(nil, "Test expects env SPEED to be either fast, moderate or slow, but got %v", modeEnv)
+	if ModeProduce == mode {
+		speedEnv, ok := conf.OptionalEnv("SPEED")
+		if !ok {
+			errMsg.LogFatal(nil, "Test expects env SPEED, if MODE is produce")
+		}
+		switch speedEnv {
+		case "untethered":
+			speed = SpeedUntethered
+		case "fast":
+			speed = SpeedFast
+		case "moderate":
+			speed = SpeedModerate
+		case "slow":
+			speed = SpeedSlow
+		default:
+			errMsg.LogFatal(nil, "Test expects env SPEED to be either untethered, fast, moderate or slow, but got %v", modeEnv)
+		}
 	}
 
 	return &ApproxCheck{
@@ -75,36 +83,87 @@ type Speed int
 
 // Speed Types
 const (
-	SpeedFast Speed = iota
+	SpeedUntethered Speed = iota
+	SpeedFast
 	SpeedModerate
 	SpeedSlow
 )
 
 // Start ...
 func (a *ApproxCheck) Start() {
+	if ModeProduce == a.mode {
+		if SpeedUntethered == a.speed {
+			a.startUntetheredProduce()
+		} else {
+			a.startTetheredProduce()
+		}
+	} else if ModeConsume == a.mode {
+		a.startConsume()
+	}
+}
+
+func (a *ApproxCheck) startUntetheredProduce() {
+	for {
+		a.produceNext()
+	}
+}
+
+func (a *ApproxCheck) startTetheredProduce() {
 	ticker := time.NewTicker(a.duration())
 	for range ticker.C {
-		a.idCounter++
+		a.produceNext()
+	}
+}
 
-		msg := a.nextDayReq()
-		msgBytes, err := json.Marshal(msg)
-		if err != nil {
-			a.errMsg.Log(&a.idCounter, "Error marshalling request message: %v", err.Error())
-			return
+func (a *ApproxCheck) produceNext() {
+	a.idCounter++
+
+	msg := a.nextDayReq()
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		a.errMsg.Log(&a.idCounter, "Error marshalling request message: %v", err.Error())
+		return
+	}
+
+	msgBytes = append(msgBytes, '\n')
+	_, err = a.output.Write(msgBytes)
+	if err != nil {
+		a.errMsg.Log(&a.idCounter, "Error writing request message to output: %v", err.Error())
+		return
+	}
+
+	err = a.output.Flush()
+	if err != nil {
+		a.errMsg.Log(&a.idCounter, "Error flushing written message to output: %v", err.Error())
+		return
+	}
+}
+
+func (a *ApproxCheck) startConsume() {
+	var hardErr error
+	for hardErr == nil {
+		var msgBytes []byte
+		msgBytes, hardErr = a.input.ReadBytes('\n')
+		if hardErr != nil {
+			break
 		}
 
-		msgBytes = append(msgBytes, '\n')
-		_, err = a.output.Write(msgBytes)
+		_, err := a.output.Write(msgBytes)
 		if err != nil {
-			a.errMsg.Log(&a.idCounter, "Error writing request message to output: %v", err.Error())
+			a.errMsg.Log(nil, "Error writing response to output: %v", err.Error())
 			return
 		}
-
 		err = a.output.Flush()
 		if err != nil {
-			a.errMsg.Log(&a.idCounter, "Error flushing written message to output: %v", err.Error())
+			a.errMsg.Log(nil, "Error flushing response to output: %v", err.Error())
 			return
 		}
+	}
+
+	if hardErr == io.EOF {
+		a.errMsg.LogFatal(nil, "Unexpected EOL listening for response input")
+	} else {
+		a.errMsg.LogFatal(nil, "Unexpected error listening for response input: %v", hardErr.Error())
 	}
 }
 
