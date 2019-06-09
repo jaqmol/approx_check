@@ -12,21 +12,38 @@ import (
 // NewApproxCheck ...
 func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 	errMsg := &errormsg.ErrorMsg{Processor: "approx_test"}
+
 	modeEnv := conf.Envs["MODE"]
 	var mode Mode
-	if "produce" == modeEnv {
+	switch modeEnv {
+	case "produce":
 		mode = ModeProduce
-	} else if "consume" == modeEnv {
+	case "consume":
 		mode = ModeConsume
-	} else {
+	default:
 		errMsg.LogFatal(nil, "Test expects env MODE to be either produce or consume, but got %v", modeEnv)
 	}
+
+	speedEnv := conf.Envs["SPEED"]
+	var speed Speed
+	switch speedEnv {
+	case "fast":
+		speed = SpeedFast
+	case "moderate":
+		speed = SpeedModerate
+	case "slow":
+		speed = SpeedSlow
+	default:
+		errMsg.LogFatal(nil, "Test expects env SPEED to be either fast, moderate or slow, but got %v", modeEnv)
+	}
+
 	return &ApproxCheck{
 		errMsg:    errMsg,
 		conf:      conf,
 		output:    conf.Outputs[0],
 		input:     conf.Inputs[0],
 		mode:      mode,
+		speed:     speed,
 		idCounter: 0,
 		date:      time.Now(),
 	}
@@ -39,6 +56,7 @@ type ApproxCheck struct {
 	output    *bufio.Writer
 	input     *bufio.Reader
 	mode      Mode
+	speed     Speed
 	idCounter int
 	date      time.Time
 }
@@ -52,9 +70,19 @@ const (
 	ModeConsume
 )
 
+// Speed ...
+type Speed int
+
+// Speed Types
+const (
+	SpeedFast Speed = iota
+	SpeedModerate
+	SpeedSlow
+)
+
 // Start ...
 func (a *ApproxCheck) Start() {
-	ticker := time.NewTicker(1000 * time.Millisecond)
+	ticker := time.NewTicker(a.duration())
 	for range ticker.C {
 		a.idCounter++
 
@@ -80,8 +108,19 @@ func (a *ApproxCheck) Start() {
 	}
 }
 
+func (a *ApproxCheck) duration() time.Duration {
+	switch a.speed {
+	case SpeedFast:
+		return 10 * time.Millisecond
+	case SpeedModerate:
+		return 200 * time.Millisecond
+	default:
+		return time.Second
+	}
+}
+
 func (a *ApproxCheck) nextDayReq() *TimeReq {
-	return &TimeReq{
+	r := &TimeReq{
 		JSONRPC: "2.0",
 		ID:      a.idCounter,
 		Method:  "NextDay",
@@ -92,8 +131,11 @@ func (a *ApproxCheck) nextDayReq() *TimeReq {
 			Weekday: a.date.Weekday().String(),
 		},
 	}
+	a.date = a.date.AddDate(0, 0, 1)
+	return r
 }
 
+// TimeReq ...
 type TimeReq struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int    `json:"id"`

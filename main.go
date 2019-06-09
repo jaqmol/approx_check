@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	conf := processorconf.NewProcessorConf("approx_test", []string{"MODE"})
+	conf := processorconf.NewProcessorConf("approx_test", []string{"MODE", "SPEED"})
 	errMsg := errormsg.ErrorMsg{Processor: "approx_test"}
 
 	if len(conf.Outputs) != 1 {
