@@ -2,17 +2,16 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"io"
 	"time"
 
-	"github.com/jaqmol/approx/errormsg"
+	"github.com/jaqmol/approx/axmsg"
 	"github.com/jaqmol/approx/processorconf"
 )
 
 // NewApproxCheck ...
 func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
-	errMsg := &errormsg.ErrorMsg{Processor: "approx_test"}
+	errMsg := &axmsg.Errors{Source: "approx_check"}
 
 	modeEnv := conf.Envs["MODE"]
 	var mode Mode
@@ -48,7 +47,7 @@ func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 	return &ApproxCheck{
 		errMsg:    errMsg,
 		conf:      conf,
-		output:    conf.Outputs[0],
+		output:    axmsg.NewWriter(conf.Outputs[0]),
 		input:     conf.Inputs[0],
 		mode:      mode,
 		speed:     speed,
@@ -59,9 +58,9 @@ func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 
 // ApproxCheck ...
 type ApproxCheck struct {
-	errMsg    *errormsg.ErrorMsg
+	errMsg    *axmsg.Errors
 	conf      *processorconf.ProcessorConf
-	output    *bufio.Writer
+	output    *axmsg.Writer
 	input     *bufio.Reader
 	mode      Mode
 	speed     Speed
@@ -116,25 +115,10 @@ func (a *ApproxCheck) startTetheredProduce() {
 }
 
 func (a *ApproxCheck) produceNext() {
-	a.idCounter++
-
-	msg := a.nextDayReq()
-	msgBytes, err := json.Marshal(msg)
-	if err != nil {
-		a.errMsg.Log(&a.idCounter, "Error marshalling request message: %v", err.Error())
-		return
-	}
-
-	msgBytes = append(msgBytes, '\n')
-	_, err = a.output.Write(msgBytes)
+	msg := a.nextDateAction()
+	err := a.output.Write(msg)
 	if err != nil {
 		a.errMsg.Log(&a.idCounter, "Error writing request message to output: %v", err.Error())
-		return
-	}
-
-	err = a.output.Flush()
-	if err != nil {
-		a.errMsg.Log(&a.idCounter, "Error flushing written message to output: %v", err.Error())
 		return
 	}
 }
@@ -147,17 +131,7 @@ func (a *ApproxCheck) startConsume() {
 		if hardErr != nil {
 			break
 		}
-
-		_, err := a.output.Write(msgBytes)
-		if err != nil {
-			a.errMsg.Log(nil, "Error writing response to output: %v", err.Error())
-			return
-		}
-		err = a.output.Flush()
-		if err != nil {
-			a.errMsg.Log(nil, "Error flushing response to output: %v", err.Error())
-			return
-		}
+		hardErr = a.output.WriteBytes(msgBytes)
 	}
 
 	if hardErr == io.EOF {
@@ -178,32 +152,26 @@ func (a *ApproxCheck) duration() time.Duration {
 	}
 }
 
-func (a *ApproxCheck) nextDayReq() *TimeReq {
-	r := &TimeReq{
-		JSONRPC: "2.0",
-		ID:      a.idCounter,
-		Method:  "NextDay",
-		Params: Params{
+func (a *ApproxCheck) nextDateAction() *axmsg.Action {
+	a.idCounter++
+	r := axmsg.NewAction(
+		nil,
+		&a.idCounter,
+		"date",
+		nil,
+		Date{
 			Day:     a.date.Day(),
 			Month:   int(a.date.Month()),
 			Year:    a.date.Year(),
 			Weekday: a.date.Weekday().String(),
 		},
-	}
+	)
 	a.date = a.date.AddDate(0, 0, 1)
 	return r
 }
 
-// TimeReq ...
-type TimeReq struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int    `json:"id"`
-	Method  string `json:"method"`
-	Params  Params `json:"params"`
-}
-
-// Params ...
-type Params struct {
+// Date ...
+type Date struct {
 	Day     int    `json:"day"`
 	Month   int    `json:"month"`
 	Year    int    `json:"year"`
