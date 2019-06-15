@@ -1,25 +1,25 @@
 package main
 
 import (
+	"github.com/jaqmol/approx/axenvs"
 	"github.com/jaqmol/approx/axmsg"
-	"github.com/jaqmol/approx/processorconf"
 )
 
 func main() {
-	conf := processorconf.NewProcessorConf("approx_check", []string{"MODE"})
+	envs := axenvs.NewEnvs("approx_check", []string{"MODE"}, []string{"SPEED"})
 	errMsg := axmsg.Errors{Source: "approx_check"}
 
-	if len(conf.Outputs) != 1 {
-		errMsg.LogFatal(nil, "Test expects exactly 1 output, but got %v", len(conf.Outputs))
+	if len(envs.Outs) != 1 {
+		errMsg.LogFatal(nil, "Check expects exactly 1 output, but got %v", len(envs.Outs))
 	}
-	if len(conf.Inputs) != 1 {
-		errMsg.LogFatal(nil, "Test expects more than 1 input, but got %v", len(conf.Inputs))
-	}
-
-	if len(conf.Envs["MODE"]) == 0 {
-		errMsg.LogFatal(nil, "Test expects value for env MODE")
+	if len(envs.Ins) != 1 {
+		errMsg.LogFatal(nil, "Check expects more than 1 input, but got %v", len(envs.Ins))
 	}
 
-	at := NewApproxCheck(conf)
+	if len(envs.Required["MODE"]) == 0 {
+		errMsg.LogFatal(nil, "Check expects value for env MODE")
+	}
+
+	at := NewApproxCheck(envs)
 	at.Start()
 }

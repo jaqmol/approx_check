@@ -1,19 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"io"
 	"time"
 
+	"github.com/jaqmol/approx/axenvs"
 	"github.com/jaqmol/approx/axmsg"
-	"github.com/jaqmol/approx/processorconf"
 )
 
 // NewApproxCheck ...
-func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
+func NewApproxCheck(envs *axenvs.Envs) *ApproxCheck {
 	errMsg := &axmsg.Errors{Source: "approx_check"}
 
-	modeEnv := conf.Envs["MODE"]
+	modeEnv := envs.Required["MODE"]
 	var mode Mode
 	switch modeEnv {
 	case "produce":
@@ -26,7 +25,7 @@ func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 
 	var speed Speed
 	if ModeProduce == mode {
-		speedEnv, ok := conf.OptionalEnv("SPEED")
+		speedEnv, ok := envs.Optional["SPEED"]
 		if !ok {
 			errMsg.LogFatal(nil, "Test expects env SPEED, if MODE is produce")
 		}
@@ -44,11 +43,12 @@ func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 		}
 	}
 
+	ins, outs := envs.InsOuts()
+
 	return &ApproxCheck{
 		errMsg:    errMsg,
-		conf:      conf,
-		output:    axmsg.NewWriter(conf.Outputs[0]),
-		input:     conf.Inputs[0],
+		output:    axmsg.NewWriter(&outs[0]),
+		input:     axmsg.NewReader(&ins[0]),
 		mode:      mode,
 		speed:     speed,
 		idCounter: 0,
@@ -59,9 +59,8 @@ func NewApproxCheck(conf *processorconf.ProcessorConf) *ApproxCheck {
 // ApproxCheck ...
 type ApproxCheck struct {
 	errMsg    *axmsg.Errors
-	conf      *processorconf.ProcessorConf
 	output    *axmsg.Writer
-	input     *bufio.Reader
+	input     *axmsg.Reader
 	mode      Mode
 	speed     Speed
 	idCounter int
@@ -127,7 +126,7 @@ func (a *ApproxCheck) startConsume() {
 	var hardErr error
 	for hardErr == nil {
 		var msgBytes []byte
-		msgBytes, hardErr = a.input.ReadBytes('\n')
+		msgBytes, hardErr = a.input.ReadBytes()
 		if hardErr != nil {
 			break
 		}
