@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/jaqmol/approx/axenvs"
@@ -15,19 +17,35 @@ func NewApproxCheck(envs *axenvs.Envs) *ApproxCheck {
 	modeEnv := envs.Required["MODE"]
 	var mode Mode
 	switch modeEnv {
-	case "produce":
-		mode = ModeProduce
-	case "consume":
-		mode = ModeConsume
+	case "check":
+		mode = ModeCheck
+	case "collect":
+		mode = ModeCollect
+	case "tick":
+		mode = ModeTick
 	default:
-		errMsg.LogFatal(nil, "Test expects env MODE to be either produce or consume, but got %v", modeEnv)
+		errMsg.LogFatal(nil, "Check expects env MODE to be either check, collect or tick but got %v", modeEnv)
+	}
+
+	var expect []string
+	if ModeCheck == mode {
+		expectEnv, ok := envs.Optional["EXPECT"]
+		if !ok {
+			errMsg.LogFatal(nil, "Check expects env EXPECT, if MODE is check")
+		}
+		rawExpect := strings.Split(expectEnv, ",")
+		expect = make([]string, 0)
+		for _, rawValue := range rawExpect {
+			value := strings.TrimSpace(rawValue)
+			expect = append(expect, value)
+		}
 	}
 
 	var speed Speed
-	if ModeProduce == mode {
+	if ModeTick == mode {
 		speedEnv, ok := envs.Optional["SPEED"]
 		if !ok {
-			errMsg.LogFatal(nil, "Test expects env SPEED, if MODE is produce")
+			errMsg.LogFatal(nil, "Check expects env SPEED, if MODE is tick")
 		}
 		switch speedEnv {
 		case "untethered":
@@ -39,32 +57,34 @@ func NewApproxCheck(envs *axenvs.Envs) *ApproxCheck {
 		case "slow":
 			speed = SpeedSlow
 		default:
-			errMsg.LogFatal(nil, "Test expects env SPEED to be either untethered, fast, moderate or slow, but got %v", modeEnv)
+			errMsg.LogFatal(nil, "Check expects env SPEED to be either untethered, fast, moderate or slow, but got %v", modeEnv)
 		}
 	}
 
 	ins, outs := envs.InsOuts()
 
 	return &ApproxCheck{
-		errMsg:    errMsg,
-		output:    axmsg.NewWriter(&outs[0]),
-		input:     axmsg.NewReader(&ins[0]),
-		mode:      mode,
-		speed:     speed,
-		idCounter: 0,
-		date:      time.Now(),
+		errMsg:  errMsg,
+		output:  axmsg.NewWriter(&outs[0]),
+		input:   axmsg.NewReader(&ins[0]),
+		mode:    mode,
+		expect:  expect,
+		speed:   speed,
+		counter: 0,
+		date:    time.Now(),
 	}
 }
 
 // ApproxCheck ...
 type ApproxCheck struct {
-	errMsg    *axmsg.Errors
-	output    *axmsg.Writer
-	input     *axmsg.Reader
-	mode      Mode
-	speed     Speed
-	idCounter int
-	date      time.Time
+	errMsg  *axmsg.Errors
+	output  *axmsg.Writer
+	input   *axmsg.Reader
+	mode    Mode
+	expect  []string
+	speed   Speed
+	counter int
+	date    time.Time
 }
 
 // Mode ...
@@ -72,8 +92,9 @@ type Mode int
 
 // Mode Types
 const (
-	ModeProduce Mode = iota
-	ModeConsume
+	ModeCheck Mode = iota
+	ModeCollect
+	ModeTick
 )
 
 // Speed ...
@@ -89,40 +110,69 @@ const (
 
 // Start ...
 func (a *ApproxCheck) Start() {
-	if ModeProduce == a.mode {
+	if ModeCheck == a.mode {
+		a.startCheck()
+	} else if ModeCollect == a.mode {
+		a.startCollect()
+	} else if ModeTick == a.mode {
 		if SpeedUntethered == a.speed {
-			a.startUntetheredProduce()
+			a.startUntetheredTick()
 		} else {
-			a.startTetheredProduce()
+			a.startTetheredTick()
 		}
-	} else if ModeConsume == a.mode {
-		a.startConsume()
 	}
 }
 
-func (a *ApproxCheck) startUntetheredProduce() {
-	for {
-		a.produceNext()
-	}
-}
-
-func (a *ApproxCheck) startTetheredProduce() {
-	ticker := time.NewTicker(a.duration())
-	for range ticker.C {
-		a.produceNext()
-	}
-}
-
-func (a *ApproxCheck) produceNext() {
-	msg := a.nextDateAction()
+func (a *ApproxCheck) startCheck() {
+	msg := a.checkAction()
 	err := a.output.Write(msg)
 	if err != nil {
-		a.errMsg.Log(&a.idCounter, "Error writing request message to output: %v", err.Error())
+		a.errMsg.Log(&a.counter, "Error writing request message to output: %v", err.Error())
 		return
+	}
+
+	actn, rawData, err := a.input.Read()
+	if actn.AXMSG == 1 && actn.Role == "check" {
+		var data Check
+		err = json.Unmarshal(rawData, &data)
+		if err != nil {
+			a.errMsg.LogFatal(actn.ID, "Error parsing response data: %v", err.Error())
+		}
+
+		procsNotFound := make([]string, 0)
+		for _, expName := range a.expect {
+			didFind := false
+			for _, prcName := range data.Processors {
+				if expName == prcName {
+					didFind = true
+					break
+				}
+			}
+			if !didFind {
+				procsNotFound = append(procsNotFound, expName)
+			}
+		}
+
+		if len(data.Processors) > 0 && len(procsNotFound) == 0 {
+			a.counter++
+			s := axmsg.NewAction(
+				&a.counter,
+				nil,
+				"check-success",
+				nil,
+				Success{Success: true},
+			)
+			a.output.Write(s)
+			if err != nil {
+				a.errMsg.LogFatal(actn.ID, "Error writing success message: %v", err.Error())
+			}
+		} else {
+			a.errMsg.LogFatal(actn.ID, "Check failed, processors %v not found", strings.Join(procsNotFound, ", "))
+		}
 	}
 }
 
-func (a *ApproxCheck) startConsume() {
+func (a *ApproxCheck) startCollect() {
 	var hardErr error
 	for hardErr == nil {
 		var msgBytes []byte
@@ -140,6 +190,28 @@ func (a *ApproxCheck) startConsume() {
 	}
 }
 
+func (a *ApproxCheck) startUntetheredTick() {
+	for {
+		a.nextTick()
+	}
+}
+
+func (a *ApproxCheck) startTetheredTick() {
+	ticker := time.NewTicker(a.duration())
+	for range ticker.C {
+		a.nextTick()
+	}
+}
+
+func (a *ApproxCheck) nextTick() {
+	msg := a.nextDateAction()
+	err := a.output.Write(msg)
+	if err != nil {
+		a.errMsg.Log(&a.counter, "Error writing request message to output: %v", err.Error())
+		return
+	}
+}
+
 func (a *ApproxCheck) duration() time.Duration {
 	switch a.speed {
 	case SpeedFast:
@@ -151,12 +223,28 @@ func (a *ApproxCheck) duration() time.Duration {
 	}
 }
 
+func (a *ApproxCheck) checkAction() *axmsg.Action {
+	a.counter++
+	cmd := "add-processor-name"
+	r := axmsg.NewAction(
+		&a.counter,
+		nil,
+		"check",
+		&cmd,
+		Check{
+			Processors: make([]string, 0),
+		},
+	)
+	a.date = a.date.AddDate(0, 0, 1)
+	return r
+}
+
 func (a *ApproxCheck) nextDateAction() *axmsg.Action {
-	a.idCounter++
+	a.counter++
 	r := axmsg.NewAction(
 		nil,
-		&a.idCounter,
-		"date",
+		&a.counter,
+		"tick",
 		nil,
 		Date{
 			Day:     a.date.Day(),
@@ -175,4 +263,14 @@ type Date struct {
 	Month   int    `json:"month"`
 	Year    int    `json:"year"`
 	Weekday string `json:"weekday"`
+}
+
+// Check ...
+type Check struct {
+	Processors []string `json:"processors"`
+}
+
+// Success ...
+type Success struct {
+	Success bool `json:"success"`
 }

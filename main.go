@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	envs := axenvs.NewEnvs("approx_check", []string{"MODE"}, []string{"SPEED"})
+	envs := axenvs.NewEnvs("approx_check", []string{"MODE"}, []string{"SPEED", "EXPECT"})
 	errMsg := axmsg.Errors{Source: "approx_check"}
 
 	if len(envs.Outs) != 1 {
